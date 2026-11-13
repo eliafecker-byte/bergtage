@@ -141,7 +141,7 @@ VIEW.gebiete = () => {
     </section>
     ${favs.length ? `<div class="resorts">${favs.map(resortCard).join('')}</div>` : `<div class="empty"><h3>Noch keine ${S.mode === 'ski' ? 'Skigebiete' : 'Bikeparks'} gewählt</h3><p>Wähle deine Gebiete aus der Liste. Für jedes siehst du hier Wetter, ${S.mode === 'ski' ? 'Schnee' : 'Trail-Zustand'}, Andrang und die Ampel.</p></div>`}
     <button class="add-tile" data-act="picker">${ic('plus')} Gebiet hinzufügen</button>
-    <p class="fine">Wetter und Schnee sind Modellwerte von Open-Meteo, keine Messungen der Bergbahnen. Der Andrang ist eine Schätzung aus Wochentag, Ferien, Feiertagen, Wetter und Gebietsgrösse. Ob Anlagen geöffnet sind, weiss die App nicht.</p>`;
+    <p class="fine">Wetter und Schnee sind Modellwerte von Open-Meteo, keine Messungen der Bergbahnen. Der Andrang ist eine Schätzung aus Wochentag, Ferien, Feiertagen, Wetter und Gebietsgrösse. „Geöffnet“ und „Geschlossen“ folgen dem hinterlegten Saisonplan und den Betriebszeiten, nicht einer Live-Meldung der Bergbahn.</p>`;
 };
 
 function kpisFor(r, w, d) {
@@ -162,6 +162,38 @@ function stripDay(r, w, d, tag = 'span', extra = '') {
   if (!x) return '';
   return `<${tag} class="sd sd--${rt.level} ${dow === 0 || dow === 6 ? 'is-we' : ''}" ${extra} title="${RATE_LABEL[rt.level]} · ${WMO(x.code)[1]}"><i>${WD[dow]}</i>${ic(WMO(x.code)[0])}<b>${tf(x.tTopMax)}</b></${tag}>`;
 }
+function opsLine(r) {
+  const st = openState(r);
+  return `<span class="rc-ops ops--${st.state}"><i class="odot"></i><span>${st.text}</span>${st.s.o.est ? '<span class="tag tag--est">geschätzt</span>' : ''}</span>`;
+}
+const fmtDateY = s => fmtDate(s) + s.slice(0, 4);
+function opsSection(r) {
+  const st = openState(r), s = st.s, o = s.o;
+  const tag = k => o.src[k] === 'est' ? '<span class="tag tag--est">geschätzt</span>' : o.src[k] === 'user' ? '<span class="tag">angepasst</span>' : '<span class="tag">recherchiert</span>';
+  const cell = (v, l, k) => `<div><i class="lab">${l}</i><b class="fig">${v}</b><span>${tag(k)}</span></div>`;
+  return `<section class="sect">
+      <div class="sect-head"><h3>Saison und Betriebszeiten</h3><button class="link" data-act="edit-ops" data-id="${esc(r.id)}">Anpassen</button></div>
+      <div class="rc-ops ops--${st.state}"><i class="odot"></i><span>${st.text}</span></div>
+      <div class="statrow statrow--4 opsgrid">${cell(fmtDateY(s.start), 'Saisonstart', 'from')}${cell(fmtDateY(s.end), 'Saisonende', 'to')}${cell(o.first, 'Erste Bergfahrt', 'first')}${cell(o.last, 'Letzte Talfahrt', 'last')}</div>
+      <p class="fine">Laut Saisonplan, keine Live-Meldung der Bergbahn. Einzelne Anlagen fahren oft kürzer, und Wind, Schneemangel oder Vorsaison-Betrieb nur am Wochenende sind nicht berücksichtigt.${o.note ? ' Quelle: ' + esc(o.note) + '.' : ''}</p>
+    </section>`;
+}
+SHEET.ops = sh => {
+  const r = resortById(sh.id), f = sh.f;
+  return { title: 'Saison und Zeiten', body: `
+    <p class="lead-note"><b>${esc(r.name)}</b></p>
+    <div class="row2">
+      <div class="field"><label for="o-from">Saisonstart</label><input id="o-from" type="date" value="${esc(f.from)}" data-in="ops" data-k="from"></div>
+      <div class="field"><label for="o-to">Saisonende</label><input id="o-to" type="date" value="${esc(f.to)}" data-in="ops" data-k="to"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label for="o-first">Erste Bergfahrt</label><input id="o-first" type="time" value="${esc(f.first)}" data-in="ops" data-k="first"></div>
+      <div class="field"><label for="o-last">Letzte Talfahrt</label><input id="o-last" type="time" value="${esc(f.last)}" data-in="ops" data-k="last"></div>
+    </div>
+    <p class="hint">Die App merkt sich Tag und Monat und wendet sie jedes Jahr wieder an. Passe die Daten an, wenn die Bergbahn neue Termine bekannt gibt.</p>
+    ${sh.err ? `<p class="note note--bad">${esc(sh.err)}</p>` : ''}`,
+    foot: `<button class="btn" data-act="ops-reset">Zurücksetzen</button><button class="btn btn--primary grow" data-act="ops-save">Speichern</button>` };
+};
 function resortCard(r) {
   const w = Weather.cached(r), t = todayISO(), x = wxDay(w, t), rt = x ? rate(r, t, w) : null;
   const mine = S.days.find(e => e.resortId === r.id && e.date === t && e.status === 'done');
@@ -175,7 +207,7 @@ function resortCard(r) {
         <span class="rc-title">${sign(rt && rt.level)}<span class="rc-name">${esc(r.name)}</span>
           <span class="rc-sub">${esc(r.region)} · ${esc(r.cc)}${r.topcard ? ' <span class="tag">TopCard</span>' : ''}</span></span>
         <span class="rc-elev"><span>${TRI_UP}${num(r.top)} m</span><span>${TRI_DOWN}${num(r.base)} m</span></span>
-      </span>${mid}
+      </span>${opsLine(r)}${mid}
     </button>
     <div class="rc-actions">
       ${mine ? `<button class="btn btn--solid" data-act="edit-entry" data-id="${mine.id}">${ic('check')} Heute eingetragen</button>`
@@ -191,7 +223,7 @@ SHEET.resort = sh => {
   const r = resortById(sh.id), w = Weather.cached(r), t = todayISO(), d = sh.d || t;
   need(r);
   const x = wxDay(w, d);
-  if (!x) return { title: r.name, body: `<p class="muted">${Weather.failed[r.id] ? 'Wetter nicht erreichbar.' : 'Wetter wird geladen …'}</p>${removeFavBtn(r)}` };
+  if (!x) return { title: r.name, body: `<p class="muted">${Weather.failed[r.id] ? 'Wetter nicht erreichbar.' : 'Wetter wird geladen …'}</p>${opsSection(r)}${removeFavBtn(r)}` };
   const rt = rate(r, d, w), cr = rt.crowd, pr = pricesFor(r), cat = priceCat(d, r.type);
   const dates = Object.keys(w.days).filter(k => k >= t).slice(0, 14);
   const f = (v, l) => `<div class="f"><b class="fig">${v}</b><i class="lab">${l}</i></div>`;
@@ -229,6 +261,7 @@ SHEET.resort = sh => {
       <div class="chips">${cr.why.map(y => `<span class="chip chip--static">${esc(y)}</span>`).join('')}</div>
       <p class="fine">Berechnet aus Wochentag, Schweizer Feiertagen und Schulferien, Wetter und Grösse des Gebiets. Es sind keine echten Besucherzahlen.</p>
     </section>
+    ${opsSection(r)}
     <section class="sect">
       <div class="sect-head"><h3>Tageskarte · Richtpreis CHF</h3><button class="link" data-act="settings">Preise anpassen</button></div>
       <div class="ptable">${['wd', 'we', 'hs'].map(priceCell).join('')}</div>
@@ -705,6 +738,18 @@ const ACT = {
     S.custom.push(r); S.favs.push(r.id); S.mode = r.type; save(); closeSheet(); toast(`${r.name} hinzugefügt`);
   },
   'open-resort'(el) { openSheet('resort', { id: el.dataset.id, d: null }); },
+  'edit-ops'(el) { const r = resortById(el.dataset.id), s = seasonAt(r, todayISO()); openSheet('ops', { id: r.id, f: { from: s.start, to: s.end, first: s.o.first, last: s.o.last } }); },
+  'ops-save'() {
+    const sh = UI.sheet, f = sh.f, okD = v => /^\d{4}-\d{2}-\d{2}$/.test(v || ''), okT = v => /^\d{2}:\d{2}$/.test(v || '');
+    if (!okD(f.from) || !okD(f.to)) { sh.err = 'Wähle Saisonstart und Saisonende.'; return renderSheet(); }
+    if (!okT(f.first) || !okT(f.last) || f.first >= f.last) { sh.err = 'Die erste Bergfahrt muss vor der letzten Talfahrt liegen.'; return renderSheet(); }
+    const b = baseOps(resortById(sh.id)), v = { from: f.from.slice(5), to: f.to.slice(5), first: f.first, last: f.last }, u = {};
+    for (const k in v) if (v[k] !== b[k]) u[k] = v[k];          // nur Abweichungen vom hinterlegten Wert merken
+    S.ops = S.ops || {};
+    if (Object.keys(u).length) S.ops[sh.id] = u; else delete S.ops[sh.id];
+    save(); openSheet('resort', { id: sh.id, d: null }); render(); toast('Saison und Zeiten gespeichert');
+  },
+  'ops-reset'() { const id = UI.sheet.id; if (S.ops) delete S.ops[id]; save(); openSheet('resort', { id, d: null }); render(); toast('Auf die hinterlegten Werte zurückgesetzt'); },
   'pick-day'(el) { UI.sheet.d = el.dataset.d; renderSheet(); },
   'retry-wx'(el) { const r = resortById(el.dataset.id); delete Weather.failed[r.id]; Weather.load(r, true).then(soon, soon); render(); },
 
@@ -823,6 +868,7 @@ const ACT = {
 const IN = {
   e(el) { UI.sheet.e[el.dataset.k] = el.value; },
   c(el) { UI.sheet.c[el.dataset.k] = el.value; },
+  ops(el) { UI.sheet.f[el.dataset.k] = el.value; },
   'picker-q'(el) { UI.sheet.q = el.value; UI.sheet.geo = null; $('#picker-list').innerHTML = pickerList(UI.sheet); },
   'tc-price'(el) { const v = +el.value; S.topcard.price = v > 0 ? v : null; save(); },
   'profile-name'(el) { S.profile.name = el.value.trim(); save(); },

@@ -246,3 +246,15 @@ const PRICES = {
   'bike-davos':        { wd: 49, we: 49, hs: 52, est: { wd: 1, we: 1, hs: 1 } },
   'jungfrau':          { wd: 75, we: 80, hs: 83, est: { wd: 1, we: 1 }, src: 'Hauptsaison 2026/27: CHF 83 (schneehoehen.de)' },
 };
+
+/* Saison und Betriebszeiten: from/to als Monat-Tag (jährlich wiederkehrend), first = erste Bergfahrt, last = letzte Talfahrt.
+   est markiert Schätzwerte. Recherchiert im November 2026 für den Winter 2026/27; Vorsaison-Wochenenden sind nicht abgebildet. */
+const OPS = {
+  'arosa-lenzerheide': { from: '11-28', to: '04-11', first: '08:30', last: '16:45', est: {}, src: 'Saison 28.11.2026 bis 11.4.2027 (graubuenden.ch), Betriebszeiten laut bergfex' },
+  'laax':              { from: '12-05', to: '04-11', first: '08:30', last: '17:30', est: {}, src: 'Saison 5.12.2026 bis 11.4.2027, Anlagen 08:30 bis 17:30 (graubuenden.ch)' },
+  'davos-parsenn':     { from: '11-20', to: '04-04', first: '08:30', last: '16:30', est: { first: 1, last: 1 }, src: 'Durchgehender Betrieb 20.11.2026 bis 4.4.2027, davor Wochenendbetrieb ab 13.11. (davos.ch)' },
+  'davos-jakobshorn':  { from: '12-04', to: '04-11', first: '08:30', last: '16:30', est: { first: 1, last: 1 }, src: 'Durchgehender Betrieb 4.12.2026 bis 11.4.2027, davor Wochenendbetrieb 27. bis 29.11. (davos.ch)' },
+  'klosters-madrisa':  { from: '12-18', to: '03-29', first: '08:30', last: '16:30', est: { first: 1, last: 1 }, src: 'Betrieb 18.12.2026 bis 29.3.2027 (davos.ch)' },
+  'davos-rinerhorn':   { from: '12-18', to: '03-29', first: '08:30', last: '16:30', est: { first: 1, last: 1 }, src: 'Betrieb 18.12.2026 bis 29.3.2027, während des WEF geschlossen (davos.ch)' },
+  'bike-lenzerheide':  { from: '05-22', to: '10-25', first: '09:00', last: '17:00', est: { to: 1, first: 1, last: 1 }, src: 'Saisonstart 22.5.2026 (graubuenden.ch)' },
+};

@@ -79,7 +79,7 @@ const DEFAULT_STATE = () => ({
   custom: [], days: [],
   topcard: { price: null }, prices: {},
   profile: { id: uid(), name: '', color: MEMBER_COLORS[Math.floor(Math.random() * MEMBER_COLORS.length)] },
-  groups: [], sync: { url: '', key: '' }, season: null,
+  groups: [], sync: { url: '', key: '' }, season: null, ops: {},
 });
 let S = (() => {
   try { const raw = JSON.parse(localStorage.getItem(LS_KEY)); if (raw && raw.v === 1) return Object.assign(DEFAULT_STATE(), raw); } catch (e) { /* leer oder gesperrt */ }
@@ -131,6 +131,47 @@ function entryPrice(e) {
   if (e.price != null) return e.price;
   const r = resortById(e.resortId);
   return r ? dayPrice(r, e.date).price : 0;
+}
+
+/* ---------- Saison und Betriebszeiten ----------
+   Ein Plan, keine Live-Meldung: Die App kennt Saisonstart, Saisonende, erste Bergfahrt und letzte Talfahrt,
+   aber nicht, ob eine Anlage wegen Wind oder Schneemangel steht. */
+function baseOps(r) {
+  if (OPS[r.id]) return OPS[r.id];
+  const all = { from: 1, to: 1, first: 1, last: 1 };
+  if (r.type === 'ski') {
+    const [from, to] = r.top >= 2800 ? ['11-28', '04-18'] : r.top >= 2200 ? ['12-12', '04-05'] : ['12-19', '03-21'];
+    return { from, to, first: '08:30', last: '16:30', est: all };
+  }
+  const [from, to] = r.top >= 2000 ? ['06-13', '10-18'] : ['05-01', '10-31'];
+  return { from, to, first: '09:00', last: '17:00', est: all };
+}
+function opsFor(r) {
+  const b = baseOps(r), u = (S.ops || {})[r.id] || {}, out = { src: {}, note: b.src || '', est: false };
+  for (const k of ['from', 'to', 'first', 'last']) {
+    out[k] = u[k] || b[k];
+    out.src[k] = u[k] ? 'user' : (b.est && b.est[k] ? 'est' : 'ok');
+    if (out.src[k] === 'est') out.est = true;
+  }
+  return out;
+}
+/* Die Saison, die am Tag d läuft, sonst die nächste. open sagt, ob d innerhalb liegt. */
+function seasonAt(r, d) {
+  const o = opsFor(r), y = +d.slice(0, 4), wrap = o.from > o.to;
+  for (const Y of [y - 1, y, y + 1]) {
+    const start = `${Y}-${o.from}`, end = `${wrap ? Y + 1 : Y}-${o.to}`;
+    if (end >= d) return { start, end, open: d >= start, o };
+  }
+  return { start: d, end: d, open: true, o };
+}
+/* Zustand jetzt: open = in Betrieb, soon = öffnet heute noch, closed = geschlossen. */
+function openState(r, now = new Date()) {
+  const t = iso(now), hm = `${pad(now.getHours())}:${pad(now.getMinutes())}`, s = seasonAt(r, t), o = s.o;
+  const days = Math.round((parseISO(s.start) - parseISO(t)) / 864e5);
+  if (!s.open) return { state: 'closed', text: `Geschlossen · Saisonstart ${fmtDate(s.start)}${days <= 60 ? ` (in ${days} ${days === 1 ? 'Tag' : 'Tagen'})` : s.start.slice(0, 4)}`, s };
+  if (hm < o.first) return { state: 'soon', text: `Öffnet heute um ${o.first} · letzte Talfahrt ${o.last}`, s };
+  if (hm <= o.last) return { state: 'open', text: `Geöffnet · letzte Talfahrt ${o.last}`, s };
+  return { state: 'closed', text: t < s.end ? `Für heute geschlossen · morgen ab ${o.first}` : 'Für heute geschlossen · letzter Saisontag', s };
 }
 
 /* ---------- Statistik ---------- */
@@ -255,6 +296,8 @@ function crowd(r, d, w) {
     if (r.type === 'ski' && m >= 5 && m <= 10) { s *= .4; why.push('ausserhalb der Wintersaison'); }
     if (r.type === 'bike' && (m >= 11 || m <= 4)) { s *= .3; why.push('ausserhalb der Bikesaison'); }
   }
+  const se = seasonAt(r, d);
+  if (!se.open) { s *= .15; why.push(se.o.est ? 'voraussichtlich ausserhalb der Saison' : 'ausserhalb der Saison'); }
   s *= .7 + r.size * .1;
   if (r.size >= 4) why.push('grosses, beliebtes Gebiet'); else if (r.size <= 2) why.push('kleines Gebiet');
   s = clamp(Math.round(s), 0, 100);
@@ -293,8 +336,10 @@ function rate(r, d, w) {
     if (x.gust >= 70) add(-15, 'stürmisch');
     if (cr.level === 'high') add(-6, 'viel Andrang erwartet'); else if (cr.level === 'low') add(3, 'wenig Andrang');
   }
+  const se = seasonAt(r, d);
+  if (!se.open) { s = Math.min(s, 20); why.unshift({ n: -1, t: `${se.o.est ? 'voraussichtlich ' : ''}ausserhalb der Saison, Start ${fmtDate(se.start)}${se.start.slice(0, 4)}` }); }
   s = clamp(Math.round(s), 0, 100);
-  return { score: s, level: s >= 66 ? 'top' : s >= 42 ? 'ok' : 'no', why, crowd: cr };
+  return { score: s, level: s >= 66 ? 'top' : s >= 42 ? 'ok' : 'no', why, crowd: cr, closed: !se.open };
 }
 
 /* ---------- GPX auswerten ---------- */
