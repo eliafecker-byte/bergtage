@@ -49,7 +49,8 @@ const elev = r => `${num(r.base)}–${num(r.top)} m`;
 /* ---------- Zustand der Oberfläche ---------- */
 const TABS = [['gebiete', 'Gebiete', 'peak'], ['kalender', 'Kalender', 'calendar'], ['topcard', 'TopCard', 'ticket'], ['gruppen', 'Gruppen', 'users'], ['statistik', 'Statistik', 'chart']];
 const UI = { tab: 'gebiete', sheet: null, sheetAnim: false, calMonth: todayISO().slice(0, 7), group: null, groups: {}, groupSort: 'ski',
-  groupMsg: '', joinCode: '', tcAnim: true, statSeason: null, syncErr: '', groupsAt: 0, toastFn: null, leaveArm: false };
+  groupMsg: '', joinCode: '', tcAnim: true, statSeason: null, syncErr: '', groupsAt: 0, toastFn: null, leaveArm: false,
+  auth: false, authMode: 'login', authForm: null, authMsg: null, authBusy: false };
 const NEED = new Set();
 const need = r => { (Array.isArray(r) ? r : [r]).forEach(x => x && NEED.add(x)); };
 
@@ -64,6 +65,8 @@ function applyLook() {
 }
 function render() {
   applyLook();
+  document.body.classList.toggle('is-auth', !!UI.auth);
+  if (UI.auth) { $('#view').innerHTML = VIEW.auth(); $('#tabs').innerHTML = ''; $('#mode').innerHTML = ''; return; }
   $('#mode').innerHTML = ['ski', 'bike'].map(m => `<button data-act="mode" data-m="${m}" aria-pressed="${S.mode === m}">${ic(m)}${m === 'ski' ? 'Ski' : 'Bike'}</button>`).join('');
   $('#tabs').innerHTML = TABS.map(([k, l, i]) => `<button data-act="tab" data-t="${k}" ${UI.tab === k ? 'aria-current="page"' : ''}>${ic(i)}<span>${l}</span></button>`).join('');
   $('#view').innerHTML = VIEW[UI.tab]();
@@ -522,31 +525,26 @@ function myMember() {
     data: { season: currentSeason(), cardPrice: S.topcard.price || null, days: myDaysShared().filter(d => d.date >= from) } };
 }
 const memberStats = m => statsOf(m.data.days || [], m.data.cardPrice, currentSeason());
-let pushT = null;
-_onSave = () => { clearTimeout(pushT); if (S.groups.length && S.profile.name) pushT = setTimeout(pushAll, 1200); };
-async function pushAll() {
-  const me = myMember();
-  for (const g of S.groups) { try { await Sync.pushMember(g.code, me); UI.syncErr = ''; } catch (e) { UI.syncErr = e.message; } }
-}
+_onSave = () => Cloud.schedulePush();
 async function refreshGroups(force) {
-  if (!S.groups.length) return;
+  if (!Sync.online()) return;
   if (!force && Date.now() - UI.groupsAt < 30000) return;
   UI.groupsAt = Date.now();
-  let changed = false;
-  for (const g of S.groups) {
-    try { const d = await Sync.fetchGroup(g.code); if (d) { UI.groups[g.code] = d; if (d.name && d.name !== g.name) { g.name = d.name; changed = true; } } else UI.groups[g.code] = { code: g.code, name: g.name, members: [], missing: true }; UI.syncErr = ''; }
-    catch (e) { UI.syncErr = e.message; }
-  }
-  if (changed) { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* egal */ } }
+  try {
+    const list = await Sync.myGroups();
+    const changed = JSON.stringify(list) !== JSON.stringify(S.groups);
+    S.groups = list;
+    for (const g of list) UI.groups[g.code] = await Sync.fetchGroup(g.code) || { code: g.code, name: g.name, members: [], missing: true };
+    for (const k of Object.keys(UI.groups)) if (!list.some(g => g.code === k)) delete UI.groups[k];
+    if (changed) save(true);
+    UI.syncErr = '';
+  } catch (e) { UI.syncErr = 'Gruppen konnten nicht geladen werden. Prüfe die Internetverbindung.'; }
   soon();
 }
-const inviteLink = code => {
-  const c = syncConfig(), cfg = c && !c.fixed ? '&cfg=' + encodeURIComponent(btoa(JSON.stringify([c.url, c.key]))) : '';
-  return `${location.href.split('#')[0]}#join=${code}${cfg}`;
-};
-const syncNote = () => Sync.online()
-  ? (UI.syncErr ? `<p class="note note--bad"><b>Online-Speicher nicht erreichbar</b><span>${esc(UI.syncErr)}. Prüfe die Angaben in den Einstellungen.</span></p>` : '')
-  : `<div class="note note--warn"><b>Gruppen sind noch nicht online</b><span>Ohne Online-Speicher bleibt eine Gruppe auf diesem Gerät, andere können ihr nicht beitreten. Die Einrichtung dauert etwa fünf Minuten.</span><div><button class="link" data-act="settings" data-focus="sync">Online-Speicher einrichten</button></div></div>`;
+const inviteLink = code => `${Cloud.appUrl || location.href.split('#')[0]}#join=${code}`;
+const syncNote = () => !Sync.online()
+  ? `<div class="note note--warn"><b>Gruppen brauchen ein Konto</b><span>Melde dich an, damit andere deinen Gruppen beitreten können.</span></div>`
+  : UI.syncErr ? `<p class="note note--bad">${esc(UI.syncErr)}</p>` : '';
 
 VIEW.gruppen = () => {
   if (UI.group && S.groups.some(g => g.code === UI.group)) return viewGroup(UI.group);
@@ -661,7 +659,7 @@ SHEET.settings = sh => {
   const tc = allResorts().filter(r => r.topcard), others = favResorts().filter(r => !r.topcard);
   const prow = r => { const p = pricesFor(r), srcTxt = k => p.src[k] === 'est' ? 'geschätzt' : p.src[k] === 'user' ? 'angepasst' : 'recherchiert';
     return `<div class="price-row"><b>${typeIc(r.type)} ${esc(r.name)}</b><div class="row3">${['wd', 'we', 'hs'].map(k => `<label>${PRICE_CAT[k]}<input type="number" inputmode="decimal" min="0" step="1" value="${p[k]}" data-in="price" data-id="${esc(r.id)}" data-k="${k}" aria-label="${esc(r.name)}: ${PRICE_CAT[k]} in CHF"><span class="src">${srcTxt(k)}</span></label>`).join('')}</div></div>`; };
-  const cur = seasonKey(todayISO()), c = syncConfig();
+  const cur = seasonKey(todayISO());
   return { title: 'Einstellungen', body: `
     <section class="sect"><h3>TopCard</h3>
       <div class="row2">
@@ -680,19 +678,54 @@ SHEET.settings = sh => {
     <section class="sect"><h3>Profil</h3>
       <div class="field"><label for="s-name">Dein Name in Gruppen</label><input id="s-name" type="text" maxlength="30" value="${esc(S.profile.name)}" data-in="profile-name" autocomplete="nickname"></div>
     </section>
-    <section class="sect" id="sync-sect"><h3>Online-Speicher für Gruppen</h3>
-      <p class="hint">${c ? (c.fixed ? 'Der Online-Speicher ist fest in der App hinterlegt (config.js).' : 'Verbunden. Einladungslinks geben diese Verbindung automatisch weiter.') : 'Damit alle in einer Gruppe dasselbe sehen, braucht die App einen gemeinsamen Speicher. Vorgesehen ist ein kostenloses Supabase-Projekt: Konto anlegen, die Datei supabase-setup.sql im SQL-Editor ausführen, dann Adresse und öffentlichen Schlüssel hier eintragen.'}</p>
-      ${c && c.fixed ? '' : `<div class="field"><label for="s-url">Projekt-Adresse</label><input id="s-url" type="url" value="${esc(S.sync.url)}" placeholder="https://….supabase.co" data-in="sync" data-k="url" autocomplete="off"></div>
-      <div class="field"><label for="s-key">Öffentlicher Schlüssel (anon / publishable)</label><input id="s-key" type="text" value="${esc(S.sync.key)}" data-in="sync" data-k="key" autocomplete="off" class="mono"></div>`}
-      <div class="btn-row"><button class="btn" data-act="sync-test">Verbindung prüfen</button></div>
-      ${sh.syncMsg ? `<p class="note ${sh.syncOk ? '' : 'note--bad'}">${esc(sh.syncMsg)}</p>` : ''}
+    <section class="sect"><h3>Konto</h3>
+      ${Cloud.signedIn ? `<p class="hint">Angemeldet als <b>${esc(Cloud.user.email)}</b>. ${Cloud.err ? esc(Cloud.err) : S.dirtyAt ? 'Änderungen werden gerade gespeichert …' : 'Alles ist online gespeichert.'}</p>
+      <div class="btn-row"><button class="btn" data-act="sign-out">Abmelden</button><button class="btn btn--ghost" data-act="privacy">Datenschutz</button></div>
+      <div><button class="btn btn--danger" data-act="delete-account">${ic('trash')} ${sh.delArm ? 'Wirklich? Alle Tage und Gruppen-Mitgliedschaften werden gelöscht. Nochmals tippen.' : 'Konto löschen'}</button></div>
+      ${sh.accMsg ? `<p class="note note--bad">${esc(sh.accMsg)}</p>` : ''}`
+      : `<p class="hint">Ohne Anmeldung bleiben deine Daten nur auf diesem Gerät.</p>`}
     </section>
     <section class="sect"><h3>Daten</h3>
-      <p class="hint">Deine Tage, Favoriten und Preise liegen im Browser dieses Geräts. Mit einer Sicherung nimmst du sie auf ein anderes Gerät mit.</p>
+      <p class="hint">${Cloud.signedIn ? 'Deine Daten liegen online und zusätzlich als Zwischenspeicher auf diesem Gerät. Eine Sicherung als Datei ist trotzdem möglich.' : 'Deine Tage, Favoriten und Preise liegen im Browser dieses Geräts. Mit einer Sicherung nimmst du sie auf ein anderes Gerät mit.'}</p>
       <div class="btn-row"><button class="btn" data-act="export">${ic('download')} Sicherung speichern</button><label class="btn filebtn">${ic('upload')} Sicherung laden<input type="file" accept=".json,application/json" data-ch="import" aria-label="Sicherungsdatei auswählen"></label></div>
       ${sh.dataMsg ? `<p class="note">${esc(sh.dataMsg)}</p>` : ''}
     </section>`,
     foot: `<button class="btn btn--primary grow" data-act="close-sheet">Fertig</button>` };
+};
+
+SHEET.privacy = () => ({ title: 'Datenschutz', body: `
+  <section class="sect"><h3>Was gespeichert wird</h3>
+    <p class="lead-note">Für dein Konto: deine E-Mail-Adresse, dein Passwort, aber nur als nicht lesbarer Hash und der Name, den du angibst. In der App: deine Tage (Datum, Gebiet, Kilometer, Höhenmeter, Notizen), Favoriten, Preise und Einstellungen.</p></section>
+  <section class="sect"><h3>Wo und wer es sieht</h3>
+    <p class="lead-note">Die Daten liegen bei Supabase in einem Rechenzentrum in Zürich. Nur du siehst deine Daten. Personen, die in derselben Gruppe sind wie du, sehen deinen Namen, deine Farbe und deine Tage der laufenden Saison mit Gebiet, Kilometern und Wert der Tageskarte. Notizen sehen sie nicht.</p></section>
+  <section class="sect"><h3>Wetter und Orte</h3>
+    <p class="lead-note">Wetter und Ortssuche kommen von Open-Meteo. Dabei werden nur die Koordinaten der Gebiete übertragen, keine persönlichen Daten.</p></section>
+  <section class="sect"><h3>Löschen</h3>
+    <p class="lead-note">Unter Einstellungen, Konto, kannst du dein Konto jederzeit löschen. Dabei werden alle deine Daten und Gruppen-Mitgliedschaften sofort entfernt.</p></section>
+  <p class="fine">Bergtage ist ein privates, nicht kommerzielles Projekt ohne Werbung und ohne Weitergabe von Daten.</p>`,
+  foot: `<button class="btn btn--primary grow" data-act="close-sheet">Schliessen</button>` });
+
+/* ---------- Anmeldung ---------- */
+VIEW.auth = () => {
+  const m = UI.authMode, f = UI.authForm || {}, busy = UI.authBusy;
+  const title = { login: 'Anmelden', signup: 'Konto erstellen', forgot: 'Passwort vergessen', reset: 'Neues Passwort' }[m];
+  const lead = { login: 'Deine Tage, Favoriten und Gruppen liegen sicher online und sind auf jedem Gerät da.', signup: 'Kostenlos. Deine Daten liegen online, und du kannst mit Freunden Gruppen bilden.', forgot: 'Wir schicken dir einen Link, mit dem du ein neues Passwort setzt.', reset: 'Wähle ein neues Passwort für dein Konto.' }[m];
+  return `<section class="auth">
+    <div class="lead"><p class="eyebrow">Ski- und Biketage</p><h1>${title}</h1><p class="lead-note">${lead}</p></div>
+    ${m === 'login' || m === 'signup' ? `<div class="seg seg--wide">${[['login', 'Anmelden'], ['signup', 'Registrieren']].map(([k, l]) => `<button data-act="auth-mode" data-m="${k}" aria-pressed="${m === k}">${l}</button>`).join('')}</div>` : ''}
+    <form class="auth-form" data-form="auth" novalidate>
+      ${m === 'signup' ? `<div class="field"><label for="a-name">Name in Gruppen</label><input id="a-name" type="text" maxlength="30" autocomplete="nickname" value="${esc(f.name || '')}" placeholder="z. B. Elia"></div>` : ''}
+      ${m !== 'reset' ? `<div class="field"><label for="a-email">E-Mail</label><input id="a-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" value="${esc(f.email || '')}"></div>` : ''}
+      ${m !== 'forgot' ? `<div class="field"><label for="a-pw">${m === 'reset' ? 'Neues Passwort' : 'Passwort'}</label><input id="a-pw" type="password" autocomplete="${m === 'login' ? 'current-password' : 'new-password'}" ${m === 'login' ? '' : 'minlength="8"'}>${m !== 'login' ? '<span class="hint">Mindestens 8 Zeichen.</span>' : ''}</div>` : ''}
+      ${UI.authMsg ? `<p class="note ${UI.authMsg.bad ? 'note--bad' : ''}">${esc(UI.authMsg.t)}</p>` : ''}
+      <button class="btn btn--primary btn--block" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Einen Moment …' : { login: 'Anmelden', signup: 'Konto erstellen', forgot: 'Link schicken', reset: 'Passwort speichern' }[m]}</button>
+    </form>
+    <div class="btn-row">
+      ${m === 'login' ? '<button class="link" data-act="auth-mode" data-m="forgot">Passwort vergessen?</button>' : ''}
+      ${m === 'forgot' ? '<button class="link" data-act="auth-mode" data-m="login">Zurück zur Anmeldung</button>' : ''}
+    </div>
+    ${m === 'signup' ? '<p class="fine">Mit der Registrierung speicherst du deine Daten online. <button class="link" data-act="privacy">Was gespeichert wird</button></p>' : ''}
+  </section>`;
 };
 
 /* =====================================================================
@@ -814,21 +847,23 @@ const ACT = {
   'save-name'() { const v = $('#pname').value.trim(); if (!v) return $('#pname').focus(); S.profile.name = v; save(); render(); toast('Name gespeichert'); },
   async 'create-group'() {
     const name = $('#gname').value.trim(); if (!name) return $('#gname').focus();
-    try { const g = await Sync.createGroup(name); S.groups.push(g); save(); await Sync.pushMember(g.code, myMember()); UI.groupMsg = ''; UI.group = g.code; await refreshGroups(true); render(); toast(`Gruppe „${name}“ erstellt`); }
-    catch (e) { UI.groupMsg = 'Die Gruppe konnte nicht erstellt werden. ' + e.message; render(); }
+    if (!Sync.online()) return;
+    try { await Cloud.push(); const g = await Sync.createGroup(name); UI.groupMsg = ''; UI.group = g.code; await refreshGroups(true); render(); toast(`Gruppe „${name}“ erstellt`); }
+    catch (e) { UI.groupMsg = 'Die Gruppe konnte nicht erstellt werden. Prüfe die Internetverbindung.'; render(); }
   },
   async 'join-group'(el) {
     const code = (el.dataset.code || $('#gcode').value).trim().toUpperCase();
     if (!/^[A-Z0-9]{6}$/.test(code)) { UI.groupMsg = 'Der Code besteht aus sechs Buchstaben und Ziffern.'; return render(); }
-    if (S.groups.some(g => g.code === code)) { UI.group = code; UI.joinCode = ''; return render(); }
+    if (S.groups.some(g => g.code === code)) { UI.group = code; setJoin(''); return render(); }
+    if (!Sync.online()) return;
     try {
-      const g = await Sync.fetchGroup(code);
-      if (!g) { UI.groupMsg = Sync.online() ? `Eine Gruppe mit dem Code ${code} gibt es nicht.` : `Den Code ${code} gibt es auf diesem Gerät nicht. Ohne Online-Speicher kannst du nur Gruppen beitreten, die auf diesem Gerät erstellt wurden.`; return render(); }
-      S.groups.push({ code, name: g.name }); save(); await Sync.pushMember(code, myMember());
-      UI.groupMsg = ''; UI.joinCode = ''; UI.group = code; await refreshGroups(true); render(); toast(`Du bist jetzt in „${g.name}“`);
-    } catch (e) { UI.groupMsg = 'Beitreten hat nicht geklappt. ' + e.message; render(); }
+      await Cloud.push();
+      const name = await Sync.joinGroup(code);
+      if (!name) { UI.groupMsg = `Eine Gruppe mit dem Code ${code} gibt es nicht.`; return render(); }
+      UI.groupMsg = ''; setJoin(''); UI.group = code; await refreshGroups(true); render(); toast(`Du bist jetzt in „${name}“`);
+    } catch (e) { UI.groupMsg = 'Beitreten hat nicht geklappt. Prüfe die Internetverbindung.'; render(); }
   },
-  'dismiss-join'() { UI.joinCode = ''; render(); },
+  'dismiss-join'() { setJoin(''); render(); },
   'open-group'(el) { UI.group = el.dataset.code; UI.leaveArm = false; refreshGroups(); render(); scrollTo(0, 0); },
   'back-groups'() { UI.group = null; UI.leaveArm = false; render(); },
   'group-sort'(el) { UI.groupSort = el.dataset.k; render(); },
@@ -837,8 +872,8 @@ const ACT = {
   async 'leave-group'(el) {
     if (!UI.leaveArm) { UI.leaveArm = true; return render(); }
     const code = el.dataset.code; UI.leaveArm = false;
-    try { await Sync.leave(code, S.profile.id); } catch (e) { /* lokal trotzdem entfernen */ }
-    S.groups = S.groups.filter(g => g.code !== code); delete UI.groups[code]; UI.group = null; save(); render(); toast('Gruppe verlassen');
+    try { await Sync.leave(code); } catch (e) { UI.groupMsg = 'Verlassen hat nicht geklappt. Prüfe die Internetverbindung.'; return render(); }
+    S.groups = S.groups.filter(g => g.code !== code); delete UI.groups[code]; UI.group = null; save(true); render(); toast('Gruppe verlassen');
   },
   async copy(el) {
     const txt = el.dataset.text;
@@ -850,12 +885,41 @@ const ACT = {
   'stat-season'(el) { UI.statSeason = +el.dataset.k; render(); },
 
   /* Einstellungen */
-  async 'sync-test'() {
+  privacy() { openSheet('privacy'); },
+  async 'sign-out'() {
+    try { await Cloud.push(); } catch (e) { /* trotzdem abmelden */ }
+    await Cloud.signOut();
+  },
+  async 'delete-account'(el) {
     const sh = UI.sheet;
-    if (!Sync.online()) { sh.syncOk = false; sh.syncMsg = 'Trage zuerst Projekt-Adresse und Schlüssel ein.'; return renderSheet(); }
-    try { await Sync.rest('bt_groups?select=code&limit=1'); sh.syncOk = true; sh.syncMsg = 'Verbindung steht. Gruppen werden jetzt online gespeichert.'; UI.syncErr = ''; }
-    catch (e) { sh.syncOk = false; sh.syncMsg = `Keine Verbindung: ${e.message}. Stimmen Adresse und Schlüssel, und wurde supabase-setup.sql ausgeführt?`; }
-    renderSheet();
+    if (!sh.delArm) { sh.delArm = true; return renderSheet(); }
+    try { await Cloud.deleteAccount(); toast('Konto und Daten gelöscht'); }
+    catch (e) { sh.delArm = false; sh.accMsg = 'Das Konto konnte nicht gelöscht werden. Prüfe die Internetverbindung.'; renderSheet(); }
+  },
+  'auth-mode'(el) { UI.authMode = el.dataset.m; UI.authMsg = null; render(); },
+  async 'auth-submit'() {
+    const v = id => ($(id) ? $(id).value.trim() : ''), mode = UI.authMode, email = v('#a-email'), pw = $('#a-pw') ? $('#a-pw').value : '';
+    UI.authForm = { name: v('#a-name'), email };
+    const fail = t => { UI.authMsg = { bad: true, t }; UI.authBusy = false; render(); };
+    if (mode !== 'reset' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail('Gib eine gültige E-Mail-Adresse ein.');
+    if ((mode === 'signup' || mode === 'reset') && pw.length < 8) return fail('Das Passwort braucht mindestens 8 Zeichen.');
+    if (mode === 'signup' && !v('#a-name')) return fail('Gib einen Namen ein. Er erscheint in deinen Gruppen.');
+    if (mode === 'login' && !pw) return fail('Gib dein Passwort ein.');
+    UI.authBusy = true; UI.authMsg = null; render();
+    try {
+      if (mode === 'login') await Cloud.signIn(email, pw);
+      else if (mode === 'signup') {
+        const r = await Cloud.signUp(v('#a-name'), email, pw);
+        if (r.needsConfirm) { UI.authMode = 'login'; UI.authMsg = { t: `Fast geschafft: Wir haben dir eine Mail an ${email} geschickt. Tippe auf den Link darin und melde dich danach hier an.` }; }
+      } else if (mode === 'forgot') {
+        await Cloud.forgot(email);
+        UI.authMode = 'login'; UI.authMsg = { t: `Wenn es für ${email} ein Konto gibt, kommt gleich eine Mail mit einem Link zum Zurücksetzen.` };
+      } else if (mode === 'reset') {
+        await Cloud.setPassword(pw);
+        UI.authMode = 'login'; UI.auth = false; toast('Neues Passwort gespeichert');
+      }
+    } catch (e) { return fail(authMessage(e)); }
+    UI.authBusy = false; render();
   },
   export() {
     const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), a = document.createElement('a');
@@ -872,7 +936,6 @@ const IN = {
   'picker-q'(el) { UI.sheet.q = el.value; UI.sheet.geo = null; $('#picker-list').innerHTML = pickerList(UI.sheet); },
   'tc-price'(el) { const v = +el.value; S.topcard.price = v > 0 ? v : null; save(); },
   'profile-name'(el) { S.profile.name = el.value.trim(); save(); },
-  sync(el) { S.sync[el.dataset.k] = el.value.trim(); save(); },
   price(el) {
     const id = el.dataset.id, k = el.dataset.k, r = resortById(id), base = basePrices(r)[k], v = el.value === '' ? null : +el.value;
     S.prices[id] = S.prices[id] || {};
@@ -920,6 +983,7 @@ const CH = {
 document.addEventListener('click', ev => { const el = ev.target.closest('[data-act]'); if (el && ACT[el.dataset.act] && !el.disabled) ACT[el.dataset.act](el, ev); });
 document.addEventListener('input', ev => { const el = ev.target.closest('[data-in]'); if (el && IN[el.dataset.in]) IN[el.dataset.in](el, ev); });
 document.addEventListener('change', ev => { const el = ev.target.closest('[data-ch]'); if (el && CH[el.dataset.ch]) CH[el.dataset.ch](el, ev); });
+document.addEventListener('submit', ev => { if (ev.target.matches('[data-form="auth"]')) { ev.preventDefault(); ACT['auth-submit'](); } });
 document.addEventListener('keydown', ev => {
   if (ev.key === 'Escape' && UI.sheet) closeSheet();
   if (ev.key === 'Enter' && ev.target.matches('#gname, #gcode, #pname, #tc-setup')) { const b = ev.target.parentElement.querySelector('button'); if (b) b.click(); }
@@ -965,23 +1029,60 @@ let topoT = null;
 addEventListener('resize', () => { clearTimeout(topoT); topoT = setTimeout(() => { if (innerWidth !== drawTopo.w || Math.abs(innerHeight - drawTopo.h) > 140) drawTopo(); }, 220); });
 
 /* ---------- Start ---------- */
+/* Ein Einladungscode überlebt die Anmeldung, auch wenn dazu die Seite neu geladen wird. */
+function setJoin(code) {
+  UI.joinCode = code;
+  try { if (code) localStorage.setItem('bt.join', code); else localStorage.removeItem('bt.join'); } catch (e) { /* egal */ }
+}
 function readInviteHash() {
   const h = new URLSearchParams(location.hash.slice(1)), code = (h.get('join') || '').toUpperCase();
-  if (!/^[A-Z0-9]{6}$/.test(code)) return;
-  const cfg = h.get('cfg');
-  if (cfg && !syncConfig()) { try { const [url, key] = JSON.parse(atob(cfg)); if (/^https:\/\//.test(url) && typeof key === 'string') { S.sync = { url, key }; save(); } } catch (e) { /* ungültig */ } }
-  if (!S.groups.some(g => g.code === code)) UI.joinCode = code; else UI.group = code;
-  UI.tab = 'gruppen';
+  if (!/^[A-Z0-9]{6}$/.test(code)) { try { const c = localStorage.getItem('bt.join'); if (c) { UI.joinCode = c; UI.tab = 'gruppen'; } } catch (e) { /* egal */ } return; }
+  setJoin(code); UI.tab = 'gruppen';
   try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* file:// */ }
 }
-function start() {
-  $('#btn-settings').innerHTML = ic('sliders');
-  readInviteHash();
+async function onSignedIn(user) {
+  const first = !Cloud.user || Cloud.user.id !== user.id;
+  Cloud.user = user; UI.auth = false; UI.authMsg = null;
+  render();
+  if (!first) return;
+  try { await Cloud.pull(); } catch (e) { Cloud.err = 'Daten konnten nicht vom Server geladen werden. Du siehst den Stand auf diesem Gerät.'; }
+  if (UI.joinCode && S.groups.some(g => g.code === UI.joinCode)) { UI.group = UI.joinCode; setJoin(''); }
   render();
   refreshGroups(true);
+}
+function onSignedOut() {
+  // Supabase meldet "abgemeldet" auch beim Start ohne Sitzung; dann ist nichts zu tun
+  if (!Cloud.user && UI.auth) return;
+  Cloud.user = null; UI.groups = {}; UI.group = null;
+  // Daten dieses Kontos vom Gerät entfernen; sie liegen online und kommen beim nächsten Anmelden zurück
+  if (S.owner) { S = Object.assign(DEFAULT_STATE(), { theme: S.theme, mode: S.mode }); save(true); }
+  UI.auth = true; UI.authMode = 'login'; UI.sheet = null; renderSheet(); render();
+}
+async function start() {
+  $('#btn-settings').innerHTML = ic('sliders');
+  readInviteHash();
+  if (Cloud.init()) {
+    UI.auth = !S.owner;          // wer schon angemeldet war, sieht sofort seine Daten, die Sitzung wird im Hintergrund geprüft
+    UI.authMode = 'login';
+    render();
+    Cloud.sb.auth.onAuthStateChange((ev, session) => {
+      if (ev === 'PASSWORD_RECOVERY') { Cloud.user = session && session.user; UI.auth = true; UI.authMode = 'reset'; UI.authMsg = null; render(); return; }
+      if (ev === 'SIGNED_OUT') { onSignedOut(); return; }
+      if (session && session.user && UI.authMode !== 'reset') setTimeout(() => onSignedIn(session.user), 0);
+    });
+    const { data } = await Cloud.sb.auth.getSession();
+    if (!data.session && !UI.auth) { UI.auth = true; render(); }
+  } else {
+    render();       // ohne Online-Speicher (z. B. offline beim allerersten Start): nur auf diesem Gerät
+  }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (S.theme === 'system') render(); });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (UI.tab === 'gruppen' || UI.tab === 'kalender') refreshGroups(); if (!UI.sheet) render(); } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { if (S.dirtyAt) Cloud.push().catch(() => {}); return; }
+    if (Cloud.signedIn && !S.dirtyAt && Date.now() - Cloud.pulledAt > 60000) Cloud.pull().then(() => { if (!UI.sheet) render(); }).catch(() => {});
+    if (UI.tab === 'gruppen' || UI.tab === 'kalender') refreshGroups();
+    if (!UI.sheet) render();
+  });
+  addEventListener('online', () => { if (S.dirtyAt) Cloud.push().catch(() => {}); });
   setInterval(() => { if (!document.hidden && (UI.tab === 'gruppen' || UI.tab === 'kalender')) refreshGroups(true); }, 60000);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { /* Schrift geladen, Layout steht */ });
 }
 start();

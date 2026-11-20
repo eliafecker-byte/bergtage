@@ -79,16 +79,23 @@ const DEFAULT_STATE = () => ({
   custom: [], days: [],
   topcard: { price: null }, prices: {},
   profile: { id: uid(), name: '', color: MEMBER_COLORS[Math.floor(Math.random() * MEMBER_COLORS.length)] },
-  groups: [], sync: { url: '', key: '' }, season: null, ops: {},
+  groups: [], season: null, ops: {},
+  owner: null,      // Konto, dem diese Daten gehören (null = vor der Anmeldung erfasst)
+  dirtyAt: 0,       // Zeitpunkt der letzten noch nicht hochgeladenen Änderung
 });
 let S = (() => {
-  try { const raw = JSON.parse(localStorage.getItem(LS_KEY)); if (raw && raw.v === 1) return Object.assign(DEFAULT_STATE(), raw); } catch (e) { /* leer oder gesperrt */ }
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_KEY));
+    if (raw && raw.v === 1) { delete raw.sync; return Object.assign(DEFAULT_STATE(), raw); }
+  } catch (e) { /* leer oder gesperrt */ }
   return DEFAULT_STATE();
 })();
 let _onSave = null;
-function save() {
+/* save(true) schreibt nur den lokalen Zwischenspeicher, ohne die Änderung zum Hochladen vorzumerken. */
+function save(clean) {
+  if (!clean) S.dirtyAt = Date.now();
   try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) { /* Speicher nicht verfügbar */ }
-  if (_onSave) _onSave();
+  if (_onSave && !clean) _onSave();
 }
 const currentSeason = () => S.season || seasonKey(todayISO());
 
@@ -395,54 +402,3 @@ function parseGPX(text) {
   };
 }
 
-/* ---------- Gruppenspeicher ----------
-   Zwei Varianten mit derselben Schnittstelle:
-   - Online (Supabase): alle Geräte sehen dieselben Daten.
-   - Lokal: Ersatz ohne Server; die Gruppe existiert dann nur in diesem Browser. */
-const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
-function syncConfig() {
-  const c = window.BERGTAGE_CONFIG || {};
-  const url = (c.supabaseUrl || S.sync.url || '').trim().replace(/\/+$/, ''), key = (c.supabaseKey || S.sync.key || '').trim();
-  return url && key ? { url, key, fixed: !!(c.supabaseUrl && c.supabaseKey) } : null;
-}
-const Sync = {
-  online: () => !!syncConfig(),
-  async rest(path, opt = {}) {
-    const c = syncConfig(), headers = { apikey: c.key, 'Content-Type': 'application/json', ...(opt.headers || {}) };
-    if (c.key.startsWith('eyJ')) headers.Authorization = 'Bearer ' + c.key;   // klassischer anon-Key (JWT)
-    const res = await fetch(`${c.url}/rest/v1/${path}`, { ...opt, headers });
-    if (!res.ok) throw new Error(`Online-Speicher antwortet mit ${res.status}`);
-    const txt = await res.text();
-    return txt ? JSON.parse(txt) : null;
-  },
-  local() { try { return JSON.parse(localStorage.getItem('bt.cloud.v1')) || { groups: {} }; } catch (e) { return { groups: {} }; } },
-  localSave(db) { try { localStorage.setItem('bt.cloud.v1', JSON.stringify(db)); } catch (e) { /* voll */ } },
-
-  async createGroup(name) {
-    const code = newCode();
-    if (this.online()) await this.rest('bt_groups', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ code, name }) });
-    else { const db = this.local(); db.groups[code] = { name, members: {} }; this.localSave(db); }
-    return { code, name };
-  },
-  /* Liefert { code, name, members: [{ id, name, color, data }] } oder null, wenn es den Code nicht gibt. */
-  async fetchGroup(code) {
-    if (this.online()) {
-      const g = await this.rest(`bt_groups?code=eq.${encodeURIComponent(code)}&select=code,name`);
-      if (!g || !g.length) return null;
-      const m = await this.rest(`bt_members?group_code=eq.${encodeURIComponent(code)}&select=member_id,name,color,data,updated_at`);
-      return { code, name: g[0].name, members: (m || []).map(x => ({ id: x.member_id, name: x.name, color: x.color, data: x.data || {}, updated: x.updated_at })) };
-    }
-    const g = this.local().groups[code]; if (!g) return null;
-    return { code, name: g.name, members: Object.entries(g.members).map(([id, x]) => ({ id, name: x.name, color: x.color, data: x.data || {}, updated: x.updated })) };
-  },
-  async pushMember(code, me) {
-    const row = { group_code: code, member_id: me.id, name: me.name, color: me.color, data: me.data, updated_at: new Date().toISOString() };
-    if (this.online()) await this.rest('bt_members?on_conflict=group_code,member_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(row) });
-    else { const db = this.local(); if (!db.groups[code]) return; db.groups[code].members[me.id] = { name: me.name, color: me.color, data: me.data, updated: row.updated_at }; this.localSave(db); }
-  },
-  async leave(code, id) {
-    if (this.online()) await this.rest(`bt_members?group_code=eq.${encodeURIComponent(code)}&member_id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
-    else { const db = this.local(); if (db.groups[code]) { delete db.groups[code].members[id]; this.localSave(db); } }
-  },
-};

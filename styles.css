@@ -349,6 +349,15 @@ table.board { border-collapse: collapse; width: 100%; font-variant-numeric: tabu
 .price-row .row3 label { display: grid; gap: 3px; font-size: .66rem; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-2); }
 .price-row .src { font-size: .66rem; text-transform: none; letter-spacing: 0; }
 
+/* ---------- Anmeldung ---------- */
+.auth { display: grid; gap: 16px; width: min(440px, 100%); padding-top: 4vh; }
+.auth-form { display: grid; gap: 14px; background: var(--panel); border: 1.5px solid var(--edge); border-radius: 3px; padding: 16px; }
+.auth-form input[type="email"], .auth-form input[type="password"] { width: 100%; min-height: 44px; padding: 9px 11px; border: 1.5px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); }
+.auth-form input:focus-visible { outline: 2.5px solid var(--accent); outline-offset: 0; border-color: transparent; }
+body.is-auth { padding-bottom: 24px; }
+.mode:empty { display: none; }
+body.is-auth #btn-settings, body.is-auth .tabs { display: none; }
+
 /* ---------- Hinweisleiste ---------- */
 #toast { position: fixed; z-index: 60; left: 50%; translate: -50% 0; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); width: max-content; max-width: calc(100vw - 32px); pointer-events: none; }
 #toast .t { pointer-events: auto; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 3px; display: flex; gap: 14px; align-items: center; font-size: .9rem; font-weight: 500; animation: sheet-in .2s ease-out; }
