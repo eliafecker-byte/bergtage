@@ -31,6 +31,7 @@ const ICON = {
   upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
   download: '<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/>',
+  map: '<path d="M3 6.5l6-3 6 3 6-3v14l-6 3-6-3-6 3zM9 3.5v14M15 6.5v14"/>',
 };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[n] || ''}</svg>`;
 const TRI_UP = '<svg viewBox="0 0 8 8" aria-hidden="true"><path d="M4 0l4 8H0z"/></svg>';
@@ -90,7 +91,8 @@ function soon() {
     const a = document.activeElement;
     if (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName) && $('#view').contains(a)) { soon(); return; }   // nicht mitten im Tippen neu zeichnen
     render();
-    if (UI.sheet && (UI.sheet.type === 'resort' || UI.sheet.type === 'day' || UI.sheet.type === 'member')) renderSheet();
+    // den offenen Pistenplan nicht neu zeichnen, sonst springt die Karte zurück
+    if (UI.sheet && ((UI.sheet.type === 'resort' && UI.sheet.tab !== 'map') || UI.sheet.type === 'day' || UI.sheet.type === 'member')) renderSheet();
   }, a11yDelay());
 }
 const a11yDelay = () => 90;
@@ -107,6 +109,7 @@ function openSheet(type, data = {}) { UI.sheet = { type, ...data }; UI.sheetAnim
 function closeSheet() { UI.sheet = null; renderSheet(); render(); }
 function renderSheet() {
   const root = $('#sheet-root');
+  PisteMap.unmount();
   if (!UI.sheet) { root.innerHTML = ''; document.body.classList.remove('sheet-open'); return; }
   const old = $('.sheet-body', root), top = old ? old.scrollTop : 0;
   const { title, body, foot } = SHEET[UI.sheet.type](UI.sheet);
@@ -117,6 +120,7 @@ function renderSheet() {
     </section>`;
   document.body.classList.add('sheet-open');
   if (!UI.sheetAnim) $('.sheet-body', root).scrollTop = top;
+  if (UI.sheet.type === 'resort' && UI.sheet.tab === 'map') PisteMap.mount(resortById(UI.sheet.id));
   UI.sheetAnim = false;
   ensureWeather([...NEED]); NEED.clear();
 }
@@ -133,32 +137,57 @@ VIEW.gebiete = () => {
     const w = Weather.cached(r); if (!w) continue;
     for (let i = 0; i < 7; i++) { const dd = addDays(t, i), rt = rate(r, dd, w); if (rt && (!best || rt.score > best.rt.score)) best = { r, d: dd, rt }; }
   }
-  const line = !favs.length ? '' : !best ? 'Wetter wird geladen …'
-    : best.rt.level === 'no' ? 'In den nächsten sieben Tagen ist bei deinen Favoriten kein guter Tag in Sicht.'
-    : `Beste Aussicht: <b>${best.d === t ? 'heute' : WD_LONG[parseISO(best.d).getDay()]} in ${esc(best.r.name)}</b> – ${RATE_LABEL[best.rt.level]}.`;
-  const hol = holidayName(t), fer = schoolHoliday(t);
-  return `<section class="lead">
-      <p class="eyebrow">${WD[d.getDay()]} ${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()} · KW ${isoWeek(d)}${hol ? ' · ' + hol : fer && fer.w >= .5 ? ' · ' + fer.name : ''}</p>
-      <h1>${S.mode === 'ski' ? 'Skigebiete' : 'Bikeparks'}</h1>
-      <p class="lead-note">${line}</p>
+  const hol = holidayName(t), fer = schoolHoliday(t), h = d.getHours();
+  const hello = h < 11 ? 'Guten Morgen' : h < 17 ? 'Hallo' : 'Guten Abend';
+  const first = (S.profile.name || '').trim().split(/\s+/)[0];
+  let hero = '';
+  if (best && best.rt.level !== 'no') {
+    const when = best.d === t ? 'Heute' : best.d === addDays(t, 1) ? 'Morgen' : WD_LONG[parseISO(best.d).getDay()];
+    hero = `<button class="hero" data-act="open-resort" data-id="${esc(best.r.id)}" data-d="${best.d}">
+        <span class="lab">Beste Aussicht in den nächsten 7 Tagen</span>
+        <span class="hero-row"><span class="hero-title">${when} in ${esc(best.r.name)}</span>${sign(best.rt.level)}</span>
+        <span class="hero-why">${esc(whyText(best.r, best.d, Weather.cached(best.r), best.rt))}</span>
+      </button>`;
+  } else if (best) {
+    hero = `<div class="hero"><span class="lab">Die nächsten 7 Tage</span><span class="hero-title">Kein guter Tag in Sicht</span><span class="hero-why">Bei keinem deiner Favoriten passen Wetter, ${S.mode === 'ski' ? 'Schnee' : 'Trails'} und Saison gleichzeitig.</span></div>`;
+  } else if (favs.length) hero = `<div class="hero"><span class="lab">Die nächsten 7 Tage</span><span class="hero-why">Wetter wird geladen …</span></div>`;
+  return `<section class="lead hello">
+      <p class="eyebrow">${WD_LONG[d.getDay()]}, ${d.getDate()}. ${MONTHS[d.getMonth()]}${hol ? ' · ' + hol : fer && fer.w >= .5 ? ' · ' + fer.name : ''}</p>
+      <h1>${hello}${first ? ', ' + esc(first) : ''}</h1>
     </section>
+    ${hero}
     ${favs.length ? `<div class="resorts">${favs.map(resortCard).join('')}</div>` : `<div class="empty"><h3>Noch keine ${S.mode === 'ski' ? 'Skigebiete' : 'Bikeparks'} gewählt</h3><p>Wähle deine Gebiete aus der Liste. Für jedes siehst du hier Wetter, ${S.mode === 'ski' ? 'Schnee' : 'Trail-Zustand'}, Andrang und die Ampel.</p></div>`}
     <button class="add-tile" data-act="picker">${ic('plus')} Gebiet hinzufügen</button>
     <p class="fine">Wetter und Schnee sind Modellwerte von Open-Meteo, keine Messungen der Bergbahnen. Der Andrang ist eine Schätzung aus Wochentag, Ferien, Feiertagen, Wetter und Gebietsgrösse. „Geöffnet“ und „Geschlossen“ folgen dem hinterlegten Saisonplan und den Betriebszeiten, nicht einer Live-Meldung der Bergbahn.</p>`;
 };
 
 function kpisFor(r, w, d) {
-  const x = wxDay(w, d), cr = crowd(r, d, w);
-  const crowdKpi = `<span class="kpi"><b class="fig fig--word"><span class="pdot pdot--${cr.level}"></span>${{ low: 'wenig', mid: 'mittel', high: 'viel' }[cr.level]}</b><i class="lab">Andrang, geschätzt</i></span>`;
+  const x = wxDay(w, d);
   if (r.type === 'ski') return `
-    <span class="kpi"><b class="fig">${tf(x.tTopMax)}</b><i class="lab">Berg</i></span>
+    <span class="kpi"><b class="fig">${tf(x.tTopMax)}</b><i class="lab">am Berg</i></span>
     <span class="kpi"><b class="fig">${x.depth == null ? '–' : num(x.depth)}<small>cm</small></b><i class="lab">Schnee</i></span>
-    <span class="kpi"><b class="fig">${num(freshSnow(w, d, 2))}<small>cm</small></b><i class="lab">Neu 48 h</i></span>${crowdKpi}`;
+    <span class="kpi"><b class="fig">${num(freshSnow(w, d, 2))}<small>cm</small></b><i class="lab">Neu in 48 h</i></span>`;
   const tr = trailState(w, d);
   return `
-    <span class="kpi"><b class="fig">${tf(x.tTopMax)}</b><i class="lab">Berg</i></span>
+    <span class="kpi"><b class="fig">${tf(x.tTopMax)}</b><i class="lab">am Berg</i></span>
     <span class="kpi"><b class="fig">${num(rainPast(w, d, 3) + x.precip)}<small>mm</small></b><i class="lab">Regen 3 Tage</i></span>
-    <span class="kpi"><b class="fig fig--word">${tr.label}</b><i class="lab">Trails</i></span>${crowdKpi}`;
+    <span class="kpi"><b class="fig fig--word">${tr.label}</b><i class="lab">Trails</i></span>`;
+}
+/* Kurze Begründung für die Ampel in einem Satz, z. B. „Kaum Schnee und starker Wind.“ */
+function whyText(r, d, w, rt) {
+  if (!rt) return '';
+  if (rt.closed) {
+    const s = seasonAt(r, d);
+    return `Noch geschlossen. ${s.o.est ? 'Voraussichtlicher ' : ''}Saisonstart ${fmtDate(s.start)}${s.start.slice(0, 4)}.`;
+  }
+  const items = rt.why.filter(y => y.n !== 0);
+  const pos = items.filter(y => y.n > 0).sort((a, b) => b.n - a.n), neg = items.filter(y => y.n < 0).sort((a, b) => a.n - b.n);
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  let txt;
+  if (rt.level === 'top') txt = pos.length ? cap(pos.slice(0, 2).map(y => y.t).join(' und ')) + (neg.length ? `, nur ${neg[0].t}` : '') : 'Gute Bedingungen ohne Ausreisser';
+  else if (rt.level === 'no') txt = neg.length ? cap(neg.slice(0, 2).map(y => y.t).join(' und ')) : 'Insgesamt eher schwache Bedingungen';
+  else txt = pos.length && neg.length ? `${cap(pos[0].t)}, aber ${neg[0].t}` : neg.length ? cap(neg[0].t) : pos.length ? cap(pos[0].t) + ', sonst durchschnittlich' : 'Durchschnittliche Bedingungen';
+  return txt + '.';
 }
 function stripDay(r, w, d, tag = 'span', extra = '') {
   const x = wxDay(w, d), rt = rate(r, d, w), dow = parseISO(d).getDay();
@@ -197,84 +226,99 @@ SHEET.ops = sh => {
     ${sh.err ? `<p class="note note--bad">${esc(sh.err)}</p>` : ''}`,
     foot: `<button class="btn" data-act="ops-reset">Zurücksetzen</button><button class="btn btn--primary grow" data-act="ops-save">Speichern</button>` };
 };
+function bars7(r, w, t) {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(t, i), x = wxDay(w, d); if (!x) return '';
+    const rt = rate(r, d, w), dow = parseISO(d).getDay();
+    return `<span class="b5 sd--${rt.level} ${dow === 0 || dow === 6 ? 'is-we' : ''}" title="${WD_LONG[dow]}: ${RATE_LABEL[rt.level]}, ${WMO(x.code)[1]}"><i>${i === 0 ? 'Heute' : WD[dow]}</i>${ic(WMO(x.code)[0])}<span>${tf(x.tTopMax)}</span><b></b></span>`;
+  }).join('');
+}
 function resortCard(r) {
   const w = Weather.cached(r), t = todayISO(), x = wxDay(w, t), rt = x ? rate(r, t, w) : null;
   const mine = S.days.find(e => e.resortId === r.id && e.date === t && e.status === 'done');
   let mid;
-  if (x) mid = `<span class="kpis">${kpisFor(r, w, t)}</span><span class="strip">${Array.from({ length: 7 }, (_, i) => stripDay(r, w, addDays(t, i))).join('')}</span>`;
+  if (x) mid = `<span class="rc-why why--${rt.level}">${esc(whyText(r, t, w, rt))}</span>
+      <span class="kpis">${kpisFor(r, w, t)}</span><span class="bars5">${bars7(r, w, t)}</span>`;
   else if (Weather.failed[r.id]) mid = `<span class="rc-state">Wetter nicht erreichbar. Prüfe die Internetverbindung.</span>`;
   else mid = `<span class="rc-state">Wetter wird geladen …</span>`;
+  const cr = rt ? rt.crowd : null;
   return `<article class="rc">
     <button class="rc-main" data-act="open-resort" data-id="${esc(r.id)}" aria-label="${esc(r.name)}: Details öffnen">
       <span class="rc-head">
-        <span class="rc-title">${sign(rt && rt.level)}<span class="rc-name">${esc(r.name)}</span>
-          <span class="rc-sub">${esc(r.region)} · ${esc(r.cc)}${r.topcard ? ' <span class="tag">TopCard</span>' : ''}</span></span>
-        <span class="rc-elev"><span>${TRI_UP}${num(r.top)} m</span><span>${TRI_DOWN}${num(r.base)} m</span></span>
-      </span>${opsLine(r)}${mid}
+        <span class="rc-title"><span class="rc-name">${esc(r.name)}</span>
+          <span class="rc-sub"><span>${esc(r.region)}</span>${r.topcard ? '<span class="tag">TopCard</span>' : ''}${cr && !rt.closed ? `<span class="crowd"><span class="pdot pdot--${cr.level}"></span>${CROWD_LABEL[cr.level]}</span>` : ''}</span></span>
+        ${rt ? sign(rt.level) : ''}
+      </span>${rt && rt.closed ? '' : opsLine(r)}${mid}
     </button>
     <div class="rc-actions">
       ${mine ? `<button class="btn btn--solid" data-act="edit-entry" data-id="${mine.id}">${ic('check')} Heute eingetragen</button>`
         : `<button class="btn btn--primary" data-act="was-there" data-id="${esc(r.id)}">${ic('check')} War da</button>`}
       <button class="btn" data-act="plan" data-id="${esc(r.id)}">${ic('calendar')} Planen</button>
       <span class="spacer"></span>
-      ${Weather.failed[r.id] ? `<button class="btn btn--ghost" data-act="retry-wx" data-id="${esc(r.id)}">Erneut laden</button>` : `<button class="icon-btn" data-act="open-resort" data-id="${esc(r.id)}" aria-label="Details zu ${esc(r.name)}">${ic('right')}</button>`}
+      ${Weather.failed[r.id] ? `<button class="btn btn--ghost" data-act="retry-wx" data-id="${esc(r.id)}">Erneut laden</button>` : `<button class="btn btn--ghost" data-act="open-resort" data-id="${esc(r.id)}" data-tab="map" aria-label="Pistenplan ${esc(r.name)}">${ic('map')} Plan</button>`}
     </div>
   </article>`;
 }
 
+const DTABS = [['wx', 'Wetter'], ['map', 'Pistenplan'], ['info', 'Preise und Zeiten']];
 SHEET.resort = sh => {
-  const r = resortById(sh.id), w = Weather.cached(r), t = todayISO(), d = sh.d || t;
+  const r = resortById(sh.id), w = Weather.cached(r), t = todayISO(), d = sh.d || t, tab = sh.tab || 'wx';
   need(r);
+  const tabs = `<div class="dtabs" role="tablist">${DTABS.map(([k, l]) => `<button role="tab" data-act="dtab" data-t="${k}" aria-pressed="${tab === k}">${k === 'map' && r.type === 'bike' ? 'Trailplan' : l}</button>`).join('')}</div>`;
+  const foot = d <= t
+    ? `<button class="btn btn--primary grow" data-act="was-there" data-id="${esc(r.id)}" data-d="${d}">${ic('check')} War da</button><button class="btn" data-act="plan" data-id="${esc(r.id)}">${ic('calendar')} Planen</button>`
+    : `<button class="btn btn--primary grow" data-act="plan" data-id="${esc(r.id)}" data-d="${d}">${ic('calendar')} ${fmtDate(d)} planen</button>`;
+
+  if (tab === 'map') return { title: r.name, body: tabs + PisteMap.html(r), foot };
+
+  if (tab === 'info') {
+    const pr = pricesFor(r), cat = priceCat(d, r.type);
+    const priceCell = k => `<div class="${k === cat ? 'is-now' : ''}"><i class="lab">${PRICE_CAT[k]}</i><b class="fig">${num(pr[k])}</b>${pr.src[k] === 'est' ? '<span class="tag tag--est">geschätzt</span>' : pr.src[k] === 'user' ? '<span class="tag">angepasst</span>' : '<span class="tag">recherchiert</span>'}</div>`;
+    return { title: r.name, foot, body: `${tabs}
+      ${opsSection(r)}
+      <section class="sect">
+        <div class="sect-head"><h3>Tageskarte für Erwachsene in CHF</h3><button class="link" data-act="settings">Preise anpassen</button></div>
+        <div class="ptable">${['wd', 'we', 'hs'].map(priceCell).join('')}</div>
+        <p class="fine">${relDay(d)} gilt: ${PRICE_CAT[cat]}, ${chf(pr[cat])}.${pr.note ? ' Quelle: ' + esc(pr.note) + '.' : ''}</p>
+      </section>
+      <section class="sect"><h3>Gebiet</h3>
+        <div class="statrow"><div><b class="fig">${num(r.top)}</b><i class="lab">m Höhe Berg</i></div><div><b class="fig">${num(r.base)}</b><i class="lab">m Höhe Tal</i></div><div><b class="fig">${num(r.top - r.base)}</b><i class="lab">m Höhendifferenz</i></div></div>
+        <p class="d-meta">${esc(r.region)} · ${esc(COUNTRY_NAMES[r.cc] || r.cc)} · ${r.lat.toFixed(2)}° N, ${r.lon.toFixed(2)}° O${r.topcard ? ' · in der TopCard enthalten' : r.partner ? ' · TopCard-Partner, Wahltage prüfen' : ''}</p>
+      </section>
+      ${removeFavBtn(r)}` };
+  }
+
   const x = wxDay(w, d);
-  if (!x) return { title: r.name, body: `<p class="muted">${Weather.failed[r.id] ? 'Wetter nicht erreichbar.' : 'Wetter wird geladen …'}</p>${opsSection(r)}${removeFavBtn(r)}` };
-  const rt = rate(r, d, w), cr = rt.crowd, pr = pricesFor(r), cat = priceCat(d, r.type);
+  if (!x) return { title: r.name, foot, body: `${tabs}<p class="muted">${Weather.failed[r.id] ? 'Wetter nicht erreichbar. Prüfe die Internetverbindung.' : 'Wetter wird geladen …'}</p>` };
+  const rt = rate(r, d, w), cr = rt.crowd;
   const dates = Object.keys(w.days).filter(k => k >= t).slice(0, 14);
   const f = (v, l) => `<div class="f"><b class="fig">${v}</b><i class="lab">${l}</i></div>`;
   const fw = (v, l) => `<div class="f"><b class="fig fig--word">${v}</b><i class="lab">${l}</i></div>`;
-  let figs = f(`${tf(x.tTopMax)}<small>/ ${tf(x.tTopMin)}</small>`, `Berg ${num(r.top)} m`) + f(`${tf(x.tBaseMax)}<small>/ ${tf(x.tBaseMin)}</small>`, `Tal ${num(r.base)} m`);
-  if (r.type === 'ski') {
-    figs += f(`${x.depth == null ? '–' : num(x.depth)}<small>cm</small>`, 'Schneehöhe') + f(`${num(x.snow)}<small>cm</small>`, d === t ? 'Neuschnee heute' : 'Neuschnee am Tag')
-      + f(`${num(freshSnow(w, d, 2))}<small>cm</small>`, 'Neuschnee 48 h') + f(`${num(freshSnow(w, d, 3))}<small>cm</small>`, 'Neuschnee 72 h');
-  } else {
-    const tr = trailState(w, d);
-    figs += f(`${num(x.precip, 1)}<small>mm</small>`, d === t ? 'Regen heute' : 'Regen am Tag') + f(`${num(rainPast(w, d, 3), 1)}<small>mm</small>`, 'Regen 3 Vortage') + fw(tr.label, 'Trail-Zustand');
-  }
-  figs += f(`${num(x.sunH, 1)}<small>h</small>`, 'Sonne') + f(`${x.cloud == null ? '–' : num(x.cloud)}<small>%</small>`, 'Bewölkung')
-    + f(`${num(x.wind)}<small>km/h</small>`, 'Wind') + f(`${num(x.gust)}<small>km/h</small>`, 'Böen')
-    + (r.type === 'ski' ? f(`${num(x.precip, 1)}<small>mm</small>`, 'Niederschlag') : '');
-  const priceCell = k => `<div class="${k === cat ? 'is-now' : ''}"><i class="lab">${PRICE_CAT[k]}</i><b class="fig">${num(pr[k])}</b>${pr.src[k] === 'est' ? '<span class="tag tag--est">geschätzt</span>' : pr.src[k] === 'user' ? '<span class="tag">angepasst</span>' : '<span class="tag">recherchiert</span>'}</div>`;
-  const body = `
-    <div class="sect">
-      <div class="d-top">${sign(rt.level)}${crowdTag(cr)}<span class="muted">${WMO(x.code)[1]}</span>${r.topcard ? '<span class="tag">TopCard</span>' : r.partner ? '<span class="tag tag--est">TopCard-Wahltage prüfen</span>' : ''}</div>
-      <p class="d-meta">${esc(r.region)} · ${esc(COUNTRY_NAMES[r.cc] || r.cc)} · ${r.lat.toFixed(2)}° N, ${r.lon.toFixed(2)}° O</p>
-    </div>
+  let figs = f(`${tf(x.tBaseMax)}<small>/ ${tf(x.tBaseMin)}</small>`, `im Tal, ${num(r.base)} m`);
+  if (r.type === 'ski') figs += f(`${x.depth == null ? '–' : num(x.depth)}<small>cm</small>`, 'Schneehöhe') + f(`${num(x.snow)}<small>cm</small>`, 'Neuschnee am Tag') + f(`${num(freshSnow(w, d, 2))}<small>cm</small>`, 'Neu in 48 h') + f(`${num(freshSnow(w, d, 3))}<small>cm</small>`, 'Neu in 72 h');
+  else { const tr = trailState(w, d); figs += f(`${num(x.precip, 1)}<small>mm</small>`, 'Regen am Tag') + f(`${num(rainPast(w, d, 3), 1)}<small>mm</small>`, 'Regen 3 Vortage') + fw(tr.label, 'Trails'); }
+  figs += f(`${num(x.sunH, 1)}<small>h</small>`, 'Sonne') + f(`${x.cloud == null ? '–' : num(x.cloud)}<small>%</small>`, 'Bewölkung') + f(`${num(x.wind)}<small>km/h</small>`, 'Wind') + f(`${num(x.gust)}<small>km/h</small>`, 'Böen');
+  const body = `${tabs}
     <div class="daypick" role="group" aria-label="Tag wählen">${dates.map(k => stripDay(r, w, k, 'button', `data-act="pick-day" data-d="${k}" aria-pressed="${k === d}"`)).join('')}</div>
-    <section class="sect">
-      <h3>${relDay(d)}${d === t && w.now.tTop != null ? ` · jetzt ${tf(w.now.tTop)} am Berg` : ''}</h3>
-      <div class="figs">${figs}</div>
+    <section class="d-hero sect">
+      <div class="d-top">${sign(rt.level)}<span class="muted">${relDay(d)} · ${WMO(x.code)[1]}</span></div>
+      <div class="d-temp">${tf(x.tTopMax)}<small style="font-size:.35em;margin-left:6px">/ ${tf(x.tTopMin)}</small></div>
+      <p class="muted">am Berg, ${num(r.top)} m${d === t && w.now.tTop != null ? ` · jetzt ${tf(w.now.tTop)}` : ''}</p>
     </section>
-    <section class="sect">
-      <h3>Warum ${RATE_LABEL[rt.level]}?</h3>
-      <ul class="why">${rt.why.length ? rt.why.map(y => `<li><span class="pm ${y.n > 0 ? 'plus' : 'minus'}">${y.n > 0 ? '+' : '−'}</span>${esc(y.t)}</li>`).join('') : '<li>Durchschnittliche Bedingungen ohne Ausreisser.</li>'}</ul>
+    <section class="why-box">
+      <h3>${rt.level === 'top' ? 'Wieso ein Top-Tag' : rt.level === 'ok' ? 'Wieso okay' : 'Wieso lieber nicht'}</h3>
+      <p>${esc(whyText(r, d, w, rt))}</p>
+      <ul class="why">${rt.why.length ? rt.why.filter(y => !/ausserhalb der Saison/.test(y.t)).map(y => `<li><span class="pm ${y.n > 0 ? 'plus' : 'minus'}">${y.n > 0 ? '+' : '−'}</span>${esc(y.t)}</li>`).join('') : '<li>Durchschnittliche Bedingungen ohne Ausreisser.</li>'}</ul>
     </section>
-    <section class="sect">
+    <div class="figs">${figs}</div>
+    <section class="why-box">
       <div class="sect-head"><h3>Andrang</h3><span class="tag tag--est">Schätzung</span></div>
       <div class="d-top">${crowdTag(cr)}</div>
       <div class="meter" aria-hidden="true"><span style="width:${cr.score}%"></span></div>
       <div class="chips">${cr.why.map(y => `<span class="chip chip--static">${esc(y)}</span>`).join('')}</div>
       <p class="fine">Berechnet aus Wochentag, Schweizer Feiertagen und Schulferien, Wetter und Grösse des Gebiets. Es sind keine echten Besucherzahlen.</p>
     </section>
-    ${opsSection(r)}
-    <section class="sect">
-      <div class="sect-head"><h3>Tageskarte · Richtpreis CHF</h3><button class="link" data-act="settings">Preise anpassen</button></div>
-      <div class="ptable">${['wd', 'we', 'hs'].map(priceCell).join('')}</div>
-      <p class="fine">${relDay(d)} gilt: ${PRICE_CAT[cat]}, ${chf(pr[cat])}.${pr.note ? ' Quelle: ' + esc(pr.note) + '.' : ''}</p>
-    </section>
-    <p class="fine">Wetterdaten: Open-Meteo, Stand ${new Date(w.at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' })} Uhr. Schneehöhe ist ein Modellwert für die Gitterzelle des Gebiets.</p>
-    ${removeFavBtn(r)}`;
-  const foot = d <= t
-    ? `<button class="btn btn--primary grow" data-act="was-there" data-id="${esc(r.id)}" data-d="${d}">${ic('check')} War da</button><button class="btn" data-act="plan" data-id="${esc(r.id)}">${ic('calendar')} Planen</button>`
-    : `<button class="btn btn--primary grow" data-act="plan" data-id="${esc(r.id)}" data-d="${d}">${ic('calendar')} ${fmtDate(d)} planen</button>`;
+    <p class="fine">Wetter und Schnee: Modellwerte von Open-Meteo, Stand ${new Date(w.at).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' })} Uhr, keine Messungen der Bergbahn.</p>`;
   return { title: r.name, body, foot };
 };
 const removeFavBtn = r => `<div><button class="btn btn--danger" data-act="unfav" data-id="${esc(r.id)}">${ic('trash')} Aus Favoriten entfernen</button></div>`;
@@ -770,7 +814,10 @@ const ACT = {
     const r = { id: 'c-' + uid(), name: String(c.name).trim(), cc: c.cc, region: c.region, lat: +c.lat, lon: +c.lon, base, top, size: clamp(+c.size || 2, 1, 5), type: c.type, topcard: false, partner: false, custom: true };
     S.custom.push(r); S.favs.push(r.id); S.mode = r.type; save(); closeSheet(); toast(`${r.name} hinzugefügt`);
   },
-  'open-resort'(el) { openSheet('resort', { id: el.dataset.id, d: null }); },
+  'open-resort'(el) { openSheet('resort', { id: el.dataset.id, d: el.dataset.d || null, tab: el.dataset.tab || 'wx' }); },
+  dtab(el) { UI.sheet.tab = el.dataset.t; renderSheet(); const b = $('.sheet-body'); if (b) b.scrollTop = 0; },
+  'map-retry'(el) { delete PisteMap.mem[el.dataset.id]; renderSheet(); },
+  'map-close'() { PisteMap.select(null); },
   'edit-ops'(el) { const r = resortById(el.dataset.id), s = seasonAt(r, todayISO()); openSheet('ops', { id: r.id, f: { from: s.start, to: s.end, first: s.o.first, last: s.o.last } }); },
   'ops-save'() {
     const sh = UI.sheet, f = sh.f, okD = v => /^\d{4}-\d{2}-\d{2}$/.test(v || ''), okT = v => /^\d{2}:\d{2}$/.test(v || '');

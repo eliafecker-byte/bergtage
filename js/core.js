@@ -327,7 +327,7 @@ function rate(r, d, w) {
     if (x.snow >= 15 && x.sunFrac < .3) add(-6, 'starker Schneefall, schlechte Sicht');
     if (x.rain >= 2) add(-28, 'Regen bis auf den Berg'); else if (x.rain >= .5) add(-10, 'etwas Regen am Berg');
     if (x.gust >= 80) add(-35, 'Sturm, Lifte können stehen'); else if (x.gust >= 60) add(-18, 'starker Wind'); else if (x.gust >= 45) add(-6, 'windig');
-    if (x.depth != null) { if (x.depth < 15) add(-35, 'kaum Schnee'); else if (x.depth < 35) add(-14, 'wenig Schnee'); else if (x.depth >= 100) add(5, 'gute Schneelage'); }
+    if (x.depth != null) { if (x.depth < 15) add(-35, 'kaum Schneeunterlage'); else if (x.depth < 35) add(-14, 'dünne Schneedecke'); else if (x.depth >= 100) add(5, 'gute Schneelage'); }
     if (x.tTopMax <= -15) add(-8, 'sehr kalt am Berg'); else if (x.tTopMax >= 6) add(-8, 'sehr mild, weicher Schnee');
     if (cr.level === 'high') add(-10, 'viel Andrang erwartet'); else if (cr.level === 'low') add(4, 'wenig Andrang');
   } else {
